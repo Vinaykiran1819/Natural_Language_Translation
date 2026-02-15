@@ -1,3 +1,6 @@
+import os
+import glob
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
@@ -5,8 +8,9 @@ from torch.utils.data import Dataset, DataLoader, random_split
 from dataset import BilingualDataset, causal_mask
 from model import build_transformer
 
-from config import get_config, get_weights_file_path, latest_weights_file_path 
+from config import get_config, get_weights_file_path, latest_weights_file_path
 import torchtext.datasets as datasets
+from datasets import load_dataset
 from torch.optim.lr_scheduler import LambdaLR
 
 from datasets import load_dataset
@@ -17,34 +21,38 @@ from tokenizers.pre_tokenizers import Whitespace
 
 from torch.utils.tensorboard import SummaryWriter
 import torchmetrics
+from torchmetrics.text import BLEUScore
+import shutil
+
 
 import warnings
 from tqdm import tqdm
 from pathlib import Path
 import os
 
-def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
+def greedy_decode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device):
     sos_idx = tokenizer_tgt.token_to_id('[SOS]')
     eos_idx = tokenizer_tgt.token_to_id('[EOS]')
 
     # Precompute the encoder output and reuse it for every token we get from the decoder
-    encoder_output = model.encode(source, source_mask)
+    encoder_output = model.encode(encoder_input, encoder_mask)
     # Initialize the decoder input with the sos token
-    decoder_input = torch.empty(1,1).fill_(sos_idx).type_as(source).to(device)
+    decoder_input = torch.empty(1, 1).fill_(sos_idx).long().to(device)
     while True:
         if decoder_input.size(1) == max_len:
             break
         # Build mask for the target (decoder input)
-        decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
+        decoder_mask = causal_mask(decoder_input.size(1)).to(device)
         # Calculate the output of the decoder
-        out = model.decoder(decoder_input,encoder_output,source_mask, decoder_mask)
+        out = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
 
         # Get the next token
         prob = model.project(out[:,-1])
 
         # select the token with the max probability (because it is a greedy search)
         _, next_word = torch.max(prob,dim=1)
-        decoder_input = torch.cat([decoder_input, torch.empty(1,1).type_as(source).fill_(next_word.item()).to(device)],dim=1)
+        next_token = torch.empty(1, 1).fill_(next_word.item()).long().to(device)
+        decoder_input = torch.cat([decoder_input, next_token], dim=1)
 
         if next_word == eos_idx:
             break
@@ -53,7 +61,7 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
 
 
 
-def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, writer, num_examples=2):
+def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, writer, num_examples=5):
     model.eval()
     count = 0
 
@@ -61,14 +69,7 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
     expected = []
     predicted = []
 
-    try:
-        # get the console window width
-        with os.popen('stty size', 'r') as console:
-            _, console_width = console.read().split()
-            console_width = int(console_width)
-    except:
-        # If we can't get the console width, use 80 as default
-        console_width = 80
+    console_width = shutil.get_terminal_size(fallback=(80, 20)).columns
 
     with torch.no_grad():
         for batch in validation_ds:
@@ -99,24 +100,23 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
                 break
 
         if writer:
-            # Evaluate the character error rate
-            # Compute the char error rate 
-            metric = torchmetrics.CharErrorRate()
-            cer = metric(predicted, expected)
-            writer.add_scalar('validation cer', cer, global_step)
-            writer.flush()
+        # Wrap metrics in a try-except so a math error doesn't kill your 20-epoch training
+            try:
+                cer_metric = torchmetrics.CharErrorRate()
+                cer = cer_metric(predicted, expected)
+                writer.add_scalar('validation cer', cer, global_step)
 
-            # Compute the word error rate
-            metric = torchmetrics.WordErrorRate()
-            wer = metric(predicted, expected)
-            writer.add_scalar('validation wer', wer, global_step)
-            writer.flush()
+                wer_metric = torchmetrics.WordErrorRate()
+                wer = wer_metric(predicted, expected)
+                writer.add_scalar('validation wer', wer, global_step)
 
-            # Compute the BLEU metric
-            metric = torchmetrics.BLEUScore()
-            bleu = metric(predicted, expected)
-            writer.add_scalar('validation BLEU', bleu, global_step)
-            writer.flush()
+                bleu_metric = torchmetrics.BLEUScore(smooth=True)
+                bleu = bleu_metric(predicted, [[ref] for ref in expected])
+                writer.add_scalar('validation BLEU', bleu, global_step)
+                writer.flush()
+                return bleu
+            except Exception as e:
+                print_msg(f"Skipping metrics for step {global_step} due to: {e}")
 
 
 def get_all_sentences(ds,lang):
@@ -129,7 +129,8 @@ def get_or_build_tokenizer(config,ds,lang):
         tokenizer = Tokenizer(WordLevel(unk_token='[UNK]'))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(special_tokens=['[UNK]','[PAD]','[SOS]','[EOS]'],min_frequency=2)
-        tokenizer.train_from_iterator(ds[lang],trainer=trainer)
+        # tokenizer.train_from_iterator(ds[lang],trainer=trainer)
+        tokenizer.train_from_iterator(get_all_sentences(ds, lang), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
     else:
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
@@ -137,6 +138,7 @@ def get_or_build_tokenizer(config,ds,lang):
 
 def get_ds(config):
     ds_raw = load_dataset('opus_books',f'{config["lang_src"]}-{config["lang_tgt"]}',split='train')
+    # ds_raw = load_dataset('opus_books', f'{config["lang_src"]}-{config["lang_tgt"]}', split='train')
 
     # Build tokenizers
     tokenizer_src = get_or_build_tokenizer(config,ds_raw,config['lang_src'])
@@ -145,11 +147,12 @@ def get_ds(config):
     # Keep 90% for training, 10% for validation
     train_ds_size = int(0.9 * len(ds_raw))
     val_ds_size = len(ds_raw) - train_ds_size
-    train_ds_raw, val_ds_raw = random_split(ds_raw, [train_ds_size, val_ds_size])
+    train_ds_raw, val_ds_raw = random_split(ds_raw, [train_ds_size, val_ds_size], generator=torch.Generator().manual_seed(42))
 
     train_ds = BilingualDataset(train_ds_raw,tokenizer_src,tokenizer_tgt,config['lang_src'],config['lang_tgt'],config['seq_len'])
     val_ds = BilingualDataset(val_ds_raw,tokenizer_src,tokenizer_tgt,config['lang_src'],config['lang_tgt'],config['seq_len'])
 
+    '''
     max_len_src = 0
     max_len_tgt = 0
 
@@ -161,9 +164,10 @@ def get_ds(config):
 
     print(f"Maximum length of source sentences: {max_len_src}")
     print(f"Maximum length of target sentences: {max_len_tgt}")
+    '''
 
     train_dataloader = DataLoader(train_ds,batch_size=config['batch_size'],shuffle=True)
-    val_dataloader = DataLoader(val_ds,batch_size=config['batch_size'],shuffle=True)
+    val_dataloader = DataLoader(val_ds,batch_size=1,shuffle=True)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
@@ -187,17 +191,41 @@ def train_model(config):
 
     initial_epoch = 0
     global_step = 0
-    if config['preload']:
-        model_filename = get_weights_file_path(config,config['preload'])
-        print(F"preloading model {model_filename}")
+    best_bleu = 0.0
+    preload = config.get('preload')
+
+    # Check if preload is None or the string "None"
+    if preload is None or str(preload).lower() == 'none':
+        print("No model to preload. Starting from scratch.")
+        model_filename = None
+    elif preload == 'latest':
+        model_filename = latest_weights_file_path(config)
+    else:
+        model_filename = get_weights_file_path(config, preload)
+
+    if model_filename:
+        print(f'Preloading model {model_filename}')
         state = torch.load(model_filename)
+        model.load_state_dict(state['model_state_dict'])
         initial_epoch = state['epoch'] + 1
         optimizer.load_state_dict(state['optimizer_state_dict'])
         global_step = state['global_step']
+        best_bleu = state.get('bleu', 0.0)
+    else:
+        print('No weights found or preload disabled. Starting from epoch 0.')
+
+    # if config['preload']:
+    #     model_filename = get_weights_file_path(config,config['preload'])
+    #     print(F"preloading model {model_filename}")
+    #     state = torch.load(model_filename)
+    #     initial_epoch = state['epoch'] + 1
+    #     optimizer.load_state_dict(state['optimizer_state_dict'])
+    #     global_step = state['global_step']
 
     loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'),label_smoothing=0.1).to(device)
 
     for epoch in range(initial_epoch,config['num_epochs']):
+        start_time = time.time()
         
         batch_iterator = tqdm(train_dataloader,desc=f"Training epoch {epoch:02d}")
         for batch in batch_iterator:
@@ -228,12 +256,28 @@ def train_model(config):
 
             # Update the weights
             optimizer.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
+
+            # ADD THIS EMERGENCY SAVE LOGIC:
+            if global_step % 500 == 0:
+                checkpoint_path = get_weights_file_path(config, f"step_{global_step}")
+                torch.save({
+                    'epoch': epoch,
+                    'global_step': global_step,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': loss.item(),
+                }, checkpoint_path)
+                # print(f"Emergency checkpoint saved at step {global_step}")
 
 
             global_step += 1
 
-        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'],device,lambda msg: batch_iterator.write(msg), global_step, writer)
+
+        end_time = time.time()
+        epoch_duration = (end_time - start_time) / 3600
+        print(f"\nEpoch {epoch:02d} completed in {epoch_duration:.2f} hours")
+
 
         # save the model at the end of the epoch
         model_filename = get_weights_file_path(config,f"{epoch:02d}")
@@ -244,12 +288,34 @@ def train_model(config):
             'global_step':global_step,
         },model_filename)
 
+        current_bleu = run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: tqdm.write(msg), global_step, writer, 5)
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        
+        if current_bleu is not None and current_bleu > best_bleu:
+            best_bleu = current_bleu
+            best_model_path = get_weights_file_path(config, "BEST_MODEL")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'global_step': global_step,
+                'bleu': best_bleu
+            }, best_model_path)
+            print(f"⭐ NEW RECORD! Best model saved with BLEU: {best_bleu:.4f}")
+
+        import glob
+        import os
+        step_files = glob.glob(os.path.join(config['model_folder'], f"*{config['model_basename']}step_*.pth"))
+        for f in step_files:
+            try:
+                os.remove(f)
+            except Exception as e:
+                pass
+
 if __name__ == '__main__':
     warnings.filterwarnings("ignore")
     config = get_config()
     train_model(config)
-
-
-
-
-

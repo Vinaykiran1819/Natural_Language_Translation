@@ -12,7 +12,7 @@ class input_embeddings(nn.Module):
         nn.init.xavier_uniform_(self.embedding.weight)
 
     def forward(self,x):
-        return self.embedding(x) * math.sqrt(self.d_model)
+        return self.embedding(x.long()) * math.sqrt(self.d_model)
 
 
 class positional_encoding(nn.Module):
@@ -34,6 +34,8 @@ class positional_encoding(nn.Module):
         # Apply the cos to odd indices
         pe[:, 1::2] = torch.cos(position * div_term) # (1, seq_len, d_model)
 
+        pe = pe.unsqueeze(0) # (1, seq_len, d_model)
+
         self.register_buffer('pe', pe)
 
     def forward(self,x):
@@ -50,6 +52,7 @@ class layer_normalization(nn.Module):
         self.bias = nn.Parameter(torch.zeros(1)) # additive factor
 
     def forward(self,x):
+        x = x.float()
         mean = x.mean(dim=-1, keepdim=True)
         std = x.std(dim=-1, keepdim=True)
         return self.alpha * (x - mean) / (std + self.eps) + self.bias
