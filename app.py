@@ -2,7 +2,7 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from model import build_transformer
-from config import get_config
+from config import get_config, latest_weights_file_path
 from tokenizers import Tokenizer
 
 # --- PAGE SETUP ---
@@ -27,8 +27,10 @@ def load_all_assets():
         d_model=config["d_model"]
     )
     
-    # Load weights - map to CPU for local demo
-    model_path = "weights/tmodel_10.pth"
+    # Load weights - use latest checkpoint, map to CPU for local demo
+    model_path = latest_weights_file_path(config)
+    if not model_path:
+        raise FileNotFoundError("No checkpoint found in weights/. Run train.py first.")
     state = torch.load(model_path, map_location=torch.device('cpu'))
     model.load_state_dict(state['model_state_dict'])
     model.eval()
@@ -64,7 +66,7 @@ def translate(sentence, model, tokenizer_src, tokenizer_tgt, config, device):
             decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
             
             # FIXED: Use model.decode to include embedding logic
-            out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+            out = model.decode(decoder_input, encoder_output, source_mask, decoder_mask)
             
             prob = model.project(out[:, -1])
             _, next_word = torch.max(prob, dim=1)

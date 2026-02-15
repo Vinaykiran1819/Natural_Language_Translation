@@ -1,7 +1,7 @@
-torch
-datasets
-tokenizers
-tqdm
-tensorboard
-transformers
-torchmetrics
+torch>=1.9.0
+datasets>=2.0.0
+tokenizers>=0.13.0
+torchmetrics>=0.9.0
+tensorboard>=2.8.0
+tqdm>=4.60.0
+streamlit>=1.20.0

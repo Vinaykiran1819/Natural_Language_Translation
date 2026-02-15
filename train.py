@@ -44,7 +44,7 @@ def greedy_decode(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_t
         # Build mask for the target (decoder input)
         decoder_mask = causal_mask(decoder_input.size(1)).to(device)
         # Calculate the output of the decoder
-        out = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
+        out = model.decode(decoder_input, encoder_output, encoder_mask, decoder_mask)
 
         # Get the next token
         prob = model.project(out[:,-1])
