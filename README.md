@@ -6,9 +6,9 @@
 
 # Language Translation with Transformer
 
-A production-ready **Neural Machine Translation (NMT)** system built from scratch using the **Transformer** architecture. This project demonstrates end-to-end machine translation from raw parallel text to trained model and inference—supporting any source-to-target language pair.
+A production-ready **Neural Machine Translation (NMT)** system built from scratch using the **Transformer** architecture. This project demonstrates end-to-end machine translation from raw parallel text to trained model and inference, supporting any source-to-target language pair.
 
-The default configuration trains an **English → Italian** model on the OPUS Books dataset. The codebase is designed to be language-agnostic: swapping the dataset and updating configuration lets you train translation models for any language pair.
+The default configuration trains an **English → Italian** model on the OPUS Books dataset. The codebase is designed to be language-agnostic: swapping the dataset and updating configuration lets you train translation models for any language pair. 
 
 > **Citation:** This implementation is based on [*Attention Is All You Need*](https://arxiv.org/abs/1706.03762) (Vaswani et al., 2017).
 
@@ -153,7 +153,7 @@ pip install -r requirements.txt
 
 ### Option A: Inference (after training)
 
-**CLI** — Auto-loads the latest checkpoint in `weights/`:
+**CLI** - Auto-loads the latest checkpoint in `weights/`:
 
 ```bash
 python translate.py
@@ -161,13 +161,13 @@ python translate.py
 
 Enter an English sentence when prompted. Type `exit` to quit.
 
-**Web app** — Auto-loads the latest checkpoint in `weights/`:
+**Web app** - Auto-loads the latest checkpoint in `weights/`:
 
 ```bash
 streamlit run app.py
 ```
 
-**Jupyter** — Edit `inference.ipynb` to point to your checkpoint, then run the cells.
+**Jupyter** - Edit `inference.ipynb` to point to your checkpoint, then run the cells.
 
 ### Option B: Full pipeline (train → infer)
 
@@ -187,7 +187,7 @@ Training is GPU-aware: it uses CUDA when available and falls back to CPU otherwi
 
 ### Dataset
 
-The default setup uses **OPUS Books** (`opus_books`) from Hugging Face—a parallel corpus of books translated between language pairs. The `en-it` split provides English–Italian sentence pairs. The dataset is downloaded automatically on first run.
+The default setup uses **OPUS Books** (`opus_books`) from Hugging Face, a parallel corpus of books translated between language pairs. The `en-it` split provides English–Italian sentence pairs. The dataset is downloaded automatically on first run.
 
 ### Basic training (English → Italian)
 
@@ -364,9 +364,9 @@ To train a model for another language pair (e.g., French → German):
 
 ## Acknowledgments
 
-- [*Attention Is All You Need*](https://arxiv.org/abs/1706.03762) — Vaswani et al., 2017
-- [OPUS](https://opus.nlpl.eu/) — Parallel corpora via Hugging Face `datasets`
-- [Hugging Face Tokenizers](https://huggingface.co/docs/tokenizers/) — Fast tokenization
+- [*Attention Is All You Need*](https://arxiv.org/abs/1706.03762) - Vaswani et al., 2017
+- [OPUS](https://opus.nlpl.eu/) - Parallel corpora via Hugging Face `datasets`
+- [Hugging Face Tokenizers](https://huggingface.co/docs/tokenizers/) - Fast tokenization
 
 ---
 
